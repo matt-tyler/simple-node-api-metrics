@@ -47,6 +47,17 @@ Resources:
       Precedence: 0
       UserPoolId: !Ref UserPool
 
+  User:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref UserPool
+      Username: !Ref Email
+      DesiredDeliveryMediums:
+        - EMAIL
+      UserAttributes:
+        - Name: email
+          Value: !Ref Email
+
   CommentReaderGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties: 
@@ -62,17 +73,6 @@ Resources:
       GroupName: deleter
       Precedence: 0
       UserPoolId: !Ref UserPool
-
-  User:
-    Type: AWS::Cognito::UserPoolUser
-    Properties:
-      UserPoolId: !Ref UserPool
-      Username: !Ref Email
-      DesiredDeliveryMediums:
-        - EMAIL
-      UserAttributes:
-        - Name: email
-          Value: !Ref Email
 
   AttachUserToWriterGroup:
     Type: AWS::Cognito::UserPoolUserToGroupAttachment

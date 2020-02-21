@@ -6,6 +6,8 @@ const env = require('env-var');
 const bodyParser = require('body-parser');
 const rbac = require('./rbac');
 const jwt = require('jsonwebtoken')
+const newLogger = require('pino');
+const xray = require('aws-xray-sdk');
 
 const app = new express();
 
@@ -19,54 +21,72 @@ const methodToAction = {
 }
 
 app.use((req, res, next) => {
-    const token = req.headers['authorization'];
-    const decoded = jwt.decode(token, { json: true });
-    const { sub } = decoded;
-    const groups = decoded['cognito:groups'] || [];
-    const { path: obj } = req;
-    const act = methodToAction[req.method];
-    console.log({ sub, obj, act});
-    console.log(sub, groups);
-    rbac.addRolesToUser(sub, groups).then(() => {
-        rbac.enforce(sub, obj, act)
-            .then(pass => {
-                if (pass) {
-                    next()
-                } else {
-                    res.status(403).json({ message: 'Forbidden' });
-                }
-            })
-    })
-    .catch(err => {
-        console.log(err);
-        throw err;
-    });
+    req['segment'] = xray.getSegment();
+    req['logger'] = newLogger();
+    next();
+});
+
+app.use((req, res, next) => {
+    const { headers, segment, method, logger, path: obj } = req;
+    xray.captureAsyncFunc('Auth Middleware', subsegment => {
+        const token = headers['authorization'];
+        const decoded = jwt.decode(token, { json: true });
+        const { sub } = decoded;
+        const groups = decoded['cognito:groups'] || [];
+        const act = methodToAction[method];
+        req.logger = req.logger.child({ sub, obj, act, groups })
+        rbac.addRolesToUser(sub, groups).then(() => {
+            rbac.enforce(sub, obj, act)
+                .then(pass => {
+                    req.logger.info("Evaluating Access");
+                    subsegment.close();
+                    if (pass) {
+                        req.logger.info("Access Allowed");
+                        next()
+                    } else {
+                        req.logger.info("Access Denied");
+                        res.status(403).json({ message: 'Forbidden' });
+                    }
+                })
+        }).catch(() => subsegment.close());
+    }, segment);
 });
 
 app.use((err, req, res, next) => {
-    console.log(err);
+    req.logger(err);
     res.status(500).json({ message: 'Internal Server Error'});
 });
 
 function newS3Client() {
-    return new s3({ params: { Bucket: env.get('BUCKET').required().asString() } });
+    return xray.captureAWSClient(
+        new s3({ 
+            params: { Bucket: env.get('BUCKET').required().asString() },
+        })
+    );
 }
 
 function getAuthor() {
     return 'anonymous';
 }
 
-app.get('/', async (req, res) => {
-    const client = newS3Client();
-    const maxItems = req.query.maxItems || 20;
-    const token = req.query.token;
-    res.status(200).json(await getMessages(client, parseInt(maxItems), token));
+app.get('/', ({ segment, query }, res) => {
+    xray.captureAsyncFunc('Get Messages', subsegment => {
+        const client = newS3Client();
+        const maxItems = query.maxItems || 20;
+        const token = query.token;
+        getMessages(client, parseInt(maxItems), token).then(response => {
+            res.status(200).json(response);
+        }).finally(() => subsegment.close());
+    }, segment);
 });
 
-app.post('/', plainTextParser, async ({ body: message }, res) => {
-    const client = newS3Client();
-    const entry = await writeMessage(client, message, getAuthor());
-    res.status(201).json(entry);
+app.post('/', plainTextParser, ({ segment, body: message }, res) => {
+    xray.captureAsyncFunc('Create Message', subsegment => {
+        const client = newS3Client();
+        writeMessage(client, message, getAuthor()).then(response => {
+            res.status(201).json(response);
+        }).finally(() => subsegment.close());
+    }, segment);
 });
 
 function ninesComplement(date) {
