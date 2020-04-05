@@ -24,6 +24,8 @@ Resources:
           Name: AWS::Include
           Parameters:
             Location: api.yaml
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
       Auth:
         Authorizers:
           OpenIdAuthorizer:
@@ -32,7 +34,6 @@ Resources:
               audience:
                 - !Ref Aud
               issuer: !Ref Issuer
-            OpenIdConnectUrl: !Sub '${Issuer}/.well-known/jwks.json'
         DefaultAuthorizer: OpenIdAuthorizer
 
 
@@ -57,18 +58,20 @@ Resources:
           Type: HttpApi # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
           Properties:
             Path: /
-            Method: get
+            Method: GET
             ApiId: !Ref GuestBookApi
             Auth:
               Authorizer: OpenIdAuthorizer
+            PayloadFormatVersion: "1.0"
         Post:
           Type: HttpApi
           Properties:
             Path: /
-            Method: post
+            Method: POST
             ApiId: !Ref GuestBookApi
             Auth:
               Authorizer: OpenIdAuthorizer
+            PayloadFormatVersion: "1.0"
 
 
 Outputs:

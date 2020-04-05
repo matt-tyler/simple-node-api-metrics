@@ -7,6 +7,7 @@
   "author": "SAM CLI",
   "license": "Apache-2.0",
   "dependencies": {
+    "aws-embedded-metrics": "^1.1.1",
     "aws-sdk": "^2.594.0",
     "aws-xray-sdk": "^2.5.0-experimental.1",
     "axios": "^0.18.0",

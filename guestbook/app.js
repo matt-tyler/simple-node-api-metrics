@@ -6,8 +6,8 @@ const env = require('env-var');
 const bodyParser = require('body-parser');
 const rbac = require('./rbac');
 const jwt = require('jsonwebtoken')
-const newLogger = require('pino');
 const xray = require('aws-xray-sdk');
+const { createMetricsLogger, Unit } = require("aws-embedded-metrics");
 
 const app = new express();
 
@@ -22,30 +22,40 @@ const methodToAction = {
 
 app.use((req, res, next) => {
     req['segment'] = xray.getSegment();
-    req['logger'] = newLogger();
+    const logger = createMetricsLogger();
+    logger.setNamespace("simple-node-api");
+    logger.setProperty("RequestId", req.headers["x-request-id"])
+    req['logger'] = logger;
     next();
 });
 
 app.use((req, res, next) => {
     const { headers, segment, method, logger, path: obj } = req;
     xray.captureAsyncFunc('Auth Middleware', subsegment => {
-        const token = headers['authorization'];
+        const token = headers['authorization'].replace("Bearer ", "");
         const decoded = jwt.decode(token, { json: true });
         const { sub } = decoded;
         const groups = decoded['cognito:groups'] || [];
         const act = methodToAction[method];
-        req.logger = req.logger.child({ sub, obj, act, groups })
+
+        req.logger.setProperty("subject", sub);
+        req.logger.setProperty("object", obj);
+        req.logger.setProperty("groups", groups);
+        req.logger.putDimensions({ "action": act});
+
+        const currentTime = new Date().getTime();
+        
         rbac.addRolesToUser(sub, groups).then(() => {
             rbac.enforce(sub, obj, act)
                 .then(pass => {
-                    req.logger.info("Evaluating Access");
                     subsegment.close();
                     if (pass) {
-                        req.logger.info("Access Allowed");
-                        next()
+                        req.logger.putDimensions({ "Authorization": "success" })
+                        req.logger.putMetric("evaluationTime", new Date().getTime() - currentTime, Unit.Milliseconds)
+                        req.logger.flush().then(() => next())
                     } else {
-                        req.logger.info("Access Denied");
-                        res.status(403).json({ message: 'Forbidden' });
+                        req.logger.putDimensions({ "Authorization": "failure" });
+                        req.logger.flush().then(() => res.status(403).json({message: "Forbidden"}))
                     }
                 })
         }).catch(() => subsegment.close());
@@ -53,7 +63,6 @@ app.use((req, res, next) => {
 });
 
 app.use((err, req, res, next) => {
-    req.logger(err);
     res.status(500).json({ message: 'Internal Server Error'});
 });
 
